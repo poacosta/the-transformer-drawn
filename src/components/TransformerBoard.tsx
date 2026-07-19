@@ -101,6 +101,7 @@ function TitleBlock({ sim, step, activeTokenIndex }: { sim: Simulation; step: nu
       <text className={resolved ? 'tb-meta tb-predict resolved' : 'tb-meta tb-predict'} x={10} y={69}>
         PREDICT {resolved ? `“${sim.nextToken}”` : '?'}
       </text>
+      <text className="tb-drawnby" textAnchor="end" x={196} y={69}>P. ACOSTA</text>
 
       <g className="board-stack-note" transform="translate(0 96)">
         {[2, 1, 0].map((offset) => (

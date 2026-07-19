@@ -270,6 +270,10 @@ function App() {
             <Download size={16} /> Sheet
           </button>
         </div>
+
+        <p className="colophon">
+          Created by <a href="https://github.com/poacosta" rel="noreferrer" target="_blank">Pedro Acosta</a> · Released under the MIT License
+        </p>
       </footer>
     </div>
   );
