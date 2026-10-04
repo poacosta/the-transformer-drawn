@@ -16,10 +16,11 @@ function App() {
 
   const sim = useMemo(() => buildSimulation(sentence), [sentence]);
   const activeStep = STEPS[currentStep];
-  const readoutRows = getReadoutRows(sim, currentStep, activeTokenIndex, temperature);
+  const readoutRows = getReadoutRows(sim, currentStep, activeTokenIndex, temperature, soloHeadId);
   const heads = getAttentionHeads(sim, activeTokenIndex);
   const isLastStep = currentStep === STEPS.length - 1;
   const isAttentionStep = currentStep >= 4 && currentStep <= 6;
+  const isQkvStep = currentStep === 3;
 
   const nextStep = () => {
     setCurrentStep((prev) => {
@@ -230,6 +231,7 @@ function App() {
               ))}
             </ul>
             {isAttentionStep && <p className="legend-hint">click a head to isolate its attention</p>}
+            {isQkvStep && <p className="legend-hint">click a head to draw its Q/K/V lanes</p>}
           </section>
         </aside>
       </main>

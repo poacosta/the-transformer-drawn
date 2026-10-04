@@ -1,12 +1,10 @@
 import {
-  FFN_EXPANDED_VECTOR,
   LAYER_COUNT,
   STEPS,
   type Simulation,
-  generateVector,
+  embed,
   getAttentionHeads,
-  getContextVector,
-  getFfnOutputVector,
+  getHeadIndex,
   getVocabulary,
 } from '../simulationData';
 
@@ -80,7 +78,9 @@ function NotesBlock({ step }: { step: number }) {
   return (
     <g className="board-notes" transform="translate(26 30)">
       <text className="board-notes-label" x={0} y={0}>NOTES</text>
-      <text className="board-notes-formula" x={0} y={20}>{STEPS[step].note}</text>
+      {STEPS[step].note.split('\n').map((line, index) => (
+        <text className="board-notes-formula" key={line} x={0} y={20 + index * 16}>{line}</text>
+      ))}
     </g>
   );
 }
@@ -188,11 +188,13 @@ function EmbeddingStage({ sim, step }: { sim: Simulation; step: number }) {
   );
 }
 
-function QkvStage({ sim, step }: { sim: Simulation; step: number }) {
+function QkvStage({ sim, step, soloHeadId }: { sim: Simulation; step: number; soloHeadId: string | null }) {
   if (step !== 3) return null;
 
   const tokenX = makeTokenX(sim.tokens.length);
   const labelX = Math.max(40, tokenX(0) - 52);
+  const headIndex = getHeadIndex(soloHeadId);
+  const head = getAttentionHeads(sim, 0)[headIndex];
 
   return (
     <g>
@@ -202,15 +204,18 @@ function QkvStage({ sim, step }: { sim: Simulation; step: number }) {
         return (
           <g key={`${token.text}-${index}`}>
             <line className="board-flow-line subtle" x1={tokenX(index)} x2={tokenX(index)} y1={TOKEN_Y - 4} y2={222} />
-            <HeatStrip values={token.qkv.query} x={x} y={196} />
-            <HeatStrip values={token.qkv.key} x={x} y={248} />
-            <HeatStrip values={token.qkv.value} x={x} y={300} />
+            <HeatStrip cellHeight={16} values={token.combined} x={x} y={370} />
+            <HeatStrip cellWidth={18} values={token.qkv[headIndex].query} x={x} y={196} />
+            <HeatStrip cellWidth={18} values={token.qkv[headIndex].key} x={x} y={248} />
+            <HeatStrip cellWidth={18} values={token.qkv[headIndex].value} x={x} y={300} />
           </g>
         );
       })}
       <text className="board-lane-label query" x={labelX} y={214}>Query</text>
       <text className="board-lane-label key" x={labelX} y={266}>Key</text>
       <text className="board-lane-label value" x={labelX} y={318}>Value</text>
+      <text className="board-lane-label" x={labelX} y={383}>x</text>
+      <text className="board-stage-caption" fill={head.color} x={labelX} y={176}>{head.label} · LN₁(x) · Wʰ</text>
     </g>
   );
 }
@@ -291,13 +296,17 @@ function AttentionStage({ sim, step, activeTokenIndex, soloHeadId, onSoloHead }:
               className={soloHeadId && soloHeadId !== head.id ? 'board-legend-item head-dim' : 'board-legend-item'}
               key={head.id}
               onClick={() => onSoloHead(soloHeadId === head.id ? null : head.id)}
-              transform={`translate(0 ${index * 52})`}
+              transform={`translate(0 ${index * 40})`}
             >
               <text className="board-head-output" fill={head.color} x={0} y={17}>{head.label}</text>
-              <HeatStrip values={head.attention.map((item) => item.weight * 2 - 1)} x={68} y={0} />
+              <HeatStrip cellWidth={18} values={head.output} x={68} y={0} />
             </g>
           ))}
-          <text className="board-merge-label" x={0} y={186}>concat + project</text>
+          <text className="board-merge-label" x={0} y={134}>concat · W_O</text>
+          <text className="board-head-output" x={0} y={161}>ctx</text>
+          <HeatStrip values={sim.positions[activeTokenIndex].context} x={68} y={144} />
+          <text className="board-head-output" x={0} y={201}>r</text>
+          <HeatStrip values={sim.positions[activeTokenIndex].residual} x={68} y={184} />
         </g>
       )}
 
@@ -329,16 +338,18 @@ function FlowLines({ sim, step, activeTokenIndex }: { sim: Simulation; step: num
     5: { x: activeX, y: 175 },
     6: { x: activeX, y: 175 },
     7: { x: 240, y: 180 },
-    8: { x: 300, y: 160 },
-    9: { x: 300, y: 160 },
+    8: { x: 306, y: 244 },
+    9: { x: 306, y: 244 },
   };
 
   return (
     <g className="board-flow-lines">
       {Object.entries(stageCenters).map(([stageIndex, center]) => {
+        if (Number(stageIndex) >= 8 && step < 8) return null;
         const isCurrent = Number(stageIndex) === step;
         const isPast = Number(stageIndex) < step;
-        const startX = activeX;
+        // The prediction (Fig. 09–10) is read from the last position, not the selected query.
+        const startX = Number(stageIndex) >= 8 ? tokenX(sim.tokens.length - 1) : activeX;
         const startY = TOKEN_Y - 12;
         const midY = (startY + center.y) / 2;
 
@@ -357,16 +368,18 @@ function FlowLines({ sim, step, activeTokenIndex }: { sim: Simulation; step: num
 function FfnStage({ sim, step, activeTokenIndex }: { sim: Simulation; step: number; activeTokenIndex: number }) {
   if (step !== 7) return null;
 
+  const trace = sim.positions[activeTokenIndex];
+
   return (
     <g transform="translate(124 178)">
-      <HeatStrip values={getContextVector(sim, activeTokenIndex)} x={0} y={0} />
-      <text className="board-stage-caption" x={36} y={-18}>context</text>
+      <HeatStrip values={trace.ffnInput} x={0} y={0} />
+      <text className="board-stage-caption" x={36} y={-18}>LN₂(r)</text>
       <path className="board-flow-line" d="M 100 14 L 190 14" />
-      <HeatStrip cellWidth={7} values={FFN_EXPANDED_VECTOR} x={210} y={0} />
-      <text className="board-stage-caption" x={260} y={-18}>expanded hidden layer</text>
+      <HeatStrip cellWidth={7} values={trace.ffnHidden} x={210} y={0} />
+      <text className="board-stage-caption" x={260} y={-18}>GELU hidden layer</text>
       <path className="board-flow-line" d="M 342 14 L 432 14" />
-      <HeatStrip values={getFfnOutputVector(sim, activeTokenIndex)} x={452} y={0} />
-      <text className="board-stage-caption" x={488} y={-18}>output</text>
+      <HeatStrip values={trace.blockOutput} x={452} y={0} />
+      <text className="board-stage-caption" x={488} y={-18}>f = r + MLP</text>
     </g>
   );
 }
@@ -376,19 +389,26 @@ function VocabularyStage({ sim, step, temperature }: { sim: Simulation; step: nu
 
   const isOutputStep = step === 9;
   const vocabulary = getVocabulary(sim, isOutputStep ? temperature : 1);
+  const logits = vocabulary.map((item) => item.logit);
+  const minLogit = Math.min(...logits);
+  const logitSpan = Math.max(...logits) - minLogit || 1;
+  const finalVector = sim.positions[sim.positions.length - 1].final;
 
   return (
     <g transform="translate(104 142)">
       <g>
-        {[generateVector(601, 18), generateVector(641, 18), generateVector(681, 18)].map((row, index) => (
-          <HeatStrip cellWidth={7} key={index} values={row} x={0} y={index * 42} />
+        {vocabulary.map((item, index) => (
+          <HeatStrip cellHeight={18} key={item.token} values={embed(item.token)} x={0} y={index * 42 - 2} />
         ))}
       </g>
-      <path className="board-flow-line" d="M 170 52 L 260 52" />
-      <text className="board-stage-caption" x={24} y={-20}>vocabulary matrix</text>
+      <text className="board-stage-caption" x={36} y={-20}>candidate rows of E</text>
+      <path className="board-flow-line" d="M 92 86 L 150 86" />
+      <HeatStrip values={finalVector} x={166} y={74} />
+      <text className="board-stage-caption" x={202} y={56}>LN_f(f)</text>
+      <path className="board-flow-line" d="M 250 86 L 284 86" />
       <g transform="translate(294 -8)">
         {vocabulary.map((item, index) => {
-          const width = isOutputStep ? Math.max(2, item.probability * 270) : Math.max(28, item.logit * 62);
+          const width = isOutputStep ? Math.max(2, item.probability * 270) : 28 + ((item.logit - minLogit) / logitSpan) * 170;
           const isWinner = item.token === sim.nextToken;
 
           return (
@@ -420,7 +440,7 @@ export default function TransformerBoard({ sim, step, activeTokenIndex, soloHead
         <SpecimenNote sim={sim} step={step} />
         <FlowLines activeTokenIndex={activeTokenIndex} sim={sim} step={step} />
         <EmbeddingStage sim={sim} step={step} />
-        <QkvStage sim={sim} step={step} />
+        <QkvStage sim={sim} soloHeadId={soloHeadId} step={step} />
         <AttentionStage activeTokenIndex={activeTokenIndex} onSoloHead={onSoloHead} sim={sim} soloHeadId={soloHeadId} step={step} />
         <FfnStage activeTokenIndex={activeTokenIndex} sim={sim} step={step} />
         <VocabularyStage sim={sim} step={step} temperature={temperature} />

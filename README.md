@@ -17,7 +17,7 @@ npm install
 npm run dev
 ```
 
-Open `http://localhost:5173`. No API keys, no downloads, no GPU — the whole "model" is a few hundred lines of seeded arithmetic.
+Open `http://localhost:5173`. No API keys, no downloads, no GPU — the whole "model" is a few hundred lines of seeded arithmetic. `npm test` runs the checks that the chain is really connected end to end.
 
 ## The ten figures
 
@@ -26,22 +26,22 @@ Open `http://localhost:5173`. No API keys, no downloads, no GPU — the whole "m
 | 01 | **Input tokens** | The sentence split into pieces, plus a dashed slot for the token to be predicted |
 | 02 | **Embeddings** | Each token as an 8-cell heat strip (amber = positive feature, blue = negative) |
 | 03 | **Positional encoding** | A wave pattern added so the two "the"s stop being identical |
-| 04 | **Q, K, V** | Every token split into Query / Key / Value lanes |
-| 05 | **Attention scores** | Each head's `Q·K⊤ / √d` comparisons drawn as arcs; future tokens masked |
+| 04 | **Q, K, V** | Each combined vector, layer-normalized and projected into 4-wide Query / Key / Value lanes for the selected head |
+| 05 | **Attention scores** | Each head's `Q·K⊤ / √d_k + b_head` comparisons drawn as arcs; future tokens masked |
 | 06 | **Softmax weights** | Scores become percentages — per head, summing to 100% |
-| 07 | **Value aggregation** | Weighted Value blends flow back along the arcs and merge into one context vector |
-| 08 | **Feed-forward network** | Expand 8 → 16, mix, contract back to 8 |
-| 09 | **Vocabulary projection** | The final vector scored against vocabulary rows → logits |
+| 07 | **Value aggregation** | Weighted Value blends flow back along the arcs, are concatenated, projected by `W_O`, and added back to the token's vector (the first residual) |
+| 08 | **Feed-forward network** | Normalize, expand 8 → 16 through GELU, contract back to 8, and add the second residual |
+| 09 | **Vocabulary projection** | The last token's final vector, layer-normalized, scored against each candidate's embedding row → logits |
 | 10 | **Final softmax** | Logits become probabilities; the title block resolves `PREDICT ?` |
 
-Each figure carries its governing formula in the sheet's NOTES block (`score = Q·K⊤ / √d`, `p = softmax(logits / T)`, …), so the drawing maps directly onto the notation you'll meet in papers.
+Each figure carries its governing formula in the sheet's NOTES block (`score = Q·K⊤ / √d_k + b_head`, `p = softmax(logits / T)`, …), so the drawing maps directly onto the notation you'll meet in papers.
 
 ## Things to try
 
-- **Write your own specimen.** Type any sentence (up to 6 words) in the header and hit *Redraw*. The simulation rebuilds deterministically — the same word always gets the same toy embedding, so you can compare sentences meaningfully.
+- **Write your own specimen.** Type any sentence (up to 6 words) in the header and hit *Redraw*. The simulation rebuilds deterministically — the same word always gets the same toy embedding, so you can compare how the same toy weights treat different sentences.
 - **Move the query.** Click a different token and watch the causal mask shift with it: token *n* can only attend to tokens 0…n. Select the first token to see why it can only attend to itself.
-- **Isolate one head.** On the attention figures, click a head in the legend. The other heads dim, and one head's "opinion" — near-neighbor syntax, subject linking, positional rhythm — becomes legible on its own.
-- **Turn the temperature dial.** On Fig. 10, drag T from 0.2 (greedy — the winner takes ~99%) to 3.0 (near-uniform — sampling gets adventurous). This is exactly the `temperature` parameter you set in LLM APIs.
+- **Isolate one head.** On the attention figures, click a head in the legend. The other heads dim, and one head's "opinion" — near-neighbor syntax, subject linking, positional rhythm — becomes legible on its own. On Fig. 04 the selected head also chooses which Q/K/V lanes are drawn.
+- **Turn the temperature dial.** On Fig. 10, drag T from 0.2 (greedy — on the default sentence `mat` climbs to 89%) to 3.0 (near-uniform — it drops to 29% and sampling gets adventurous). This is exactly the `temperature` parameter you set in LLM APIs.
 - **Export the sheet.** The *Sheet* button downloads the current figure as a standalone SVG — useful for slides, handouts, or printing.
 - **Drive it from the keyboard.** `←` / `→` step through figures, `Space` plays and pauses.
 
@@ -49,23 +49,25 @@ Each figure carries its governing formula in the sheet's NOTES block (`score = Q
 
 ## What's real and what's toy
 
-Educational honesty matters. This app teaches the *dataflow and mechanics* of a transformer truthfully, but it does not contain a trained model:
+Educational honesty matters. This app computes one GPT-style decoder block for real, end to end, but it does not contain a trained model:
 
 | Real | Toy |
 |------|-----|
-| The pipeline order and shapes (embed → +position → Q/K/V → scores → softmax → weighted values → FFN → logits → softmax) | Embeddings and Q/K/V vectors are seeded pseudo-random, derived from a hash of the token text — no learned weights |
-| The arithmetic: dot products, `√d` scaling, per-head softmax, weighted sums, temperature scaling are all computed for real on the numbers shown | The three heads' "personalities" are hand-written bias functions, standing in for what training would discover |
-| Causal masking — future tokens genuinely never contribute | The vocabulary is 5 candidates chosen from a word pool by sentence hash (the default sentence keeps its classic `mat` ending) |
-| Softmax outputs really sum to 100%; temperature really reshapes them | The FFN "computation" is illustrative mixing, not a learned MLP |
+| The full chain, each stage computed from the previous stage's output: embedding + position → LayerNorm → per-head Q/K/V projections → scaled scores, causal mask, softmax → weighted values → concat · `W_O` → residual → LayerNorm → GELU MLP → residual → final LayerNorm → tied output logits → temperature softmax | Weights are seeded, not learned: every matrix is drawn deterministically from one global `MODEL_SEED`, so the same sentence always produces the same sheet |
+| All of it is computed on the numbers shown — change a position vector, `W_O` or `W₁` and the logits change (the tests check exactly this) | `d = 8`, three heads of width 4 (so `d_k · h = 12 ≠ d`; real models usually use `d_k = d / h`), one block, five candidates |
+| Pre-LN layout, as in GPT-2: LayerNorm before each sublayer, residual added after it | The positional "wave" is a simplified sinusoid, not the 2017 formula (and GPT-2 learns its positions instead) |
+| The output layer is tied to the token embeddings, as in GPT-2: logits are dot products with each candidate's embedding row | Each head gets a small hand-written score bias (`b_head`: near-neighbor syntax, subject link, positional rhythm) so its pattern is easy to tell apart; set `TEACHING_BIAS = false` in `src/simulationData.ts` to remove it |
+| Causal masking — future tokens genuinely never contribute; softmax outputs really sum to 100%; temperature really reshapes them | `MODEL_SEED` was chosen by a one-off search (the first seed where `mat` leads by at least 0.4 logits) so that the default sentence predicts `mat`; the candidates come from a fixed list (default sentence) or a word pool chosen by sentence hash |
 
-A real GPT does exactly what this drawing does — just with `d_model ≈ 12,288` instead of 8, ~96 heads instead of 3, a ~100k-token vocabulary instead of 5, and the block stacked ~dozens of times (see the "×12" note under the title block).
+A real GPT block runs the same chain with learned weights instead of seeded ones, and at a much larger scale: GPT-2 small, for example, uses 768-dimensional vectors, 12 heads per layer, a 50,257-token vocabulary and 12 stacked blocks (see the "×12" note under the title block). GPT-2 uses GELU in its feed-forward layers; the original 2017 Transformer used ReLU and placed layer normalization after each residual addition rather than before each sublayer.
 
 ## How the code is organized
 
 ```
 src/
-├── simulationData.ts        # The entire "model": buildSimulation(sentence) → tokens,
-│                            #   vectors, attention heads, logits. Pure, seeded, testable.
+├── simulationData.ts        # The entire "model": seeded params + one Pre-LN block.
+│                            #   buildSimulation(sentence) → every stage, every position.
+├── simulationData.test.ts   # Determinism, shapes, softmax, causal mask, chaining (Vitest).
 ├── components/
 │   └── TransformerBoard.tsx # The SVG sheet: one small component per figure, plus the
 │                            #   grid, drawing frame, NOTES block, and live title block.
